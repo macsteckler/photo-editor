@@ -12,7 +12,7 @@ struct FilmUniforms {
   float4 p4; // blue: hue shift, chroma, lightness ; bypass
   float4 p5; // warm: hue shift, chroma ; halation ; bloom
   float4 p6; // grain, grain size, softness, vignette
-  float4 p7; // frame, seed, srgb input, source lod
+  float4 p7; // unused, seed, srgb input, source lod
 };
 
 constexpr sampler lsamp(coord::normalized, address::clamp_to_edge, filter::linear, mip_filter::linear);
@@ -203,21 +203,6 @@ kernel void finalize(texture2d<float, access::sample> src [[texture(0)]],
     col += grain * strength * 0.2 * ampS * resp * (float3(n) + nc * 0.4 * (1.0 - U.p3.w));
   }
 
-  if (U.p7.x > 0.5) {
-    float seed = U.p7.y;
-    float2 c = (p - 0.5 * full) / shortS;
-    float2 offs = (float2(hash12(float2(seed, 1.0)), hash12(float2(seed, 2.0))) - 0.5) * 0.006;
-    float2 he = 0.5 * full / shortS - float2(0.011);
-    float rad = 0.028;
-    float2 d = abs(c - offs) - (he - rad);
-    float sd = length(max(d, float2(0.0))) + min(max(d.x, d.y), 0.0) - rad;
-    float ang = atan2(c.y, c.x);
-    sd += (vn(float2(ang * 90.0, seed * 7.0)) - 0.5) * 0.0018 + (vn(float2(ang * 12.0, seed * 3.0)) - 0.5) * 0.002;
-    float px = 1.2 / shortS;
-    float inside = 1.0 - smoothstep(-px, px, sd);
-    col *= 1.0 - 0.35 * smoothstep(-0.03, 0.0, sd);
-    col = mix(float3(0.012, 0.011, 0.012), col, float3(inside));
-  }
   dst.write(float4(clamp(col, float3(0.0), float3(1.0)), 1.0), gid);
 }
 """#

@@ -135,7 +135,6 @@ struct AdjustSheet: View {
                     row("Grain size", $settings.grainSize, 0.5...3)
                     row("Softness", $settings.softness, 0...1)
                     row("Vignette", $settings.vignette, 0...1)
-                    Toggle("Film gate frame", isOn: $settings.frame)
                 } header: {
                     HStack { Text("Texture"); Spacer(); Button("Reset") { settings.resetToLook() }.font(.caption) }
                 }

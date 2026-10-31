@@ -25,16 +25,15 @@ struct Look: Identifiable, Equatable {
     var grainSize: Float = 1
     var softness: Float = 0
     var vignette: Float = 0
-    var frame = false
     var none = false
 
     static let all: [Look] = [
         Look(id: "monsoon", name: "Monsoon", temp: -0.15, tint: 0.04, contrast: 1.1, fade: 0.022, saturation: 1.12,
              splitS: [-0.018, -0.024], splitH: [0.012, 0.022], green: [-10, 0.7, 0.95], blue: [-12, 0.85, 1.0], warm: [-4, 1.15],
-             halation: 1.0, bloom: 0.45, grain: 0.75, grainSize: 1.4, softness: 0.5, vignette: 0.45, frame: true),
+             halation: 1.0, bloom: 0.45, grain: 0.75, grainSize: 1.4, softness: 0.5, vignette: 0.45),
         Look(id: "lantern", name: "Lantern", temp: 0.12, tint: 0.0, contrast: 1.05, fade: 0.014, saturation: 1.06,
              splitS: [-0.014, -0.014], splitH: [0.008, 0.03], green: [-20, 0.8, 0.9], blue: [-6, 1.15, 0.95], warm: [4, 1.15],
-             halation: 0.55, bloom: 0.35, grain: 0.5, grainSize: 1.1, softness: 0.35, vignette: 0.35, frame: true),
+             halation: 0.55, bloom: 0.35, grain: 0.5, grainSize: 1.1, softness: 0.35, vignette: 0.35),
         Look(id: "golden", name: "Golden", temp: 0.2, tint: 0.03, contrast: 1.15, fade: 0.01, saturation: 1.15,
              splitS: [-0.006, -0.014], splitH: [0.012, 0.035], green: [-24, 0.95, 0.85], blue: [-10, 0.9, 1.0], warm: [2, 1.2],
              halation: 0.7, bloom: 0.3, grain: 0.42, grainSize: 1.1, softness: 0.3, vignette: 0.4),
@@ -69,7 +68,6 @@ final class FilmSettings: ObservableObject {
     @Published var grainSize: Float = 1
     @Published var softness: Float = 0
     @Published var vignette: Float = 0
-    @Published var frame = false
 
     var look: Look { Look.byID(lookID) }
 
@@ -82,7 +80,7 @@ final class FilmSettings: ObservableObject {
         let l = look
         contrast = l.contrast; fade = l.fade; saturation = l.saturation; split = 1
         halation = l.halation; bloom = l.bloom; grain = l.grain; grainSize = l.grainSize
-        softness = l.softness; vignette = l.vignette; frame = l.frame
+        softness = l.softness; vignette = l.vignette
         UserDefaults.standard.set(lookID, forKey: "lookID")
     }
 
@@ -96,7 +94,7 @@ final class FilmSettings: ObservableObject {
         FilmSettingsSnapshot(look: look, strength: strength, exposure: exposure, temp: temp, tint: tint,
                              contrast: contrast, fade: fade, saturation: saturation, split: split,
                              halation: halation, bloom: bloom, grain: grain, grainSize: grainSize,
-                             softness: softness, vignette: vignette, frame: frame)
+                             softness: softness, vignette: vignette)
     }
 }
 
@@ -104,7 +102,6 @@ struct FilmSettingsSnapshot {
     var look: Look
     var strength, exposure, temp, tint, contrast, fade, saturation, split: Float
     var halation, bloom, grain, grainSize, softness, vignette: Float
-    var frame: Bool
 
     func uniforms(seed: Float, srgbInput: Bool, sourceLod: Float, bypass: Bool = false) -> FilmUniforms {
         let st: Float = look.none ? 0 : strength
@@ -117,7 +114,7 @@ struct FilmSettingsSnapshot {
         u.p4 = SIMD4(look.blue.x, look.blue.y, look.blue.z, bypass ? 1 : 0)
         u.p5 = SIMD4(look.warm.x, look.warm.y, halation * st, bloom * st)
         u.p6 = SIMD4(grain, grainSize, softness * st, vignette * st)
-        u.p7 = SIMD4(frame ? 1 : 0, seed, srgbInput ? 1 : 0, sourceLod)
+        u.p7 = SIMD4(0, seed, srgbInput ? 1 : 0, sourceLod)
         return u
     }
 

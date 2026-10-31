@@ -165,25 +165,25 @@
 const LOOKS = [
   { id: 'monsoon', name: 'Monsoon', temp: -0.15, tint: 0.04, contrast: 1.1, fade: 0.022, saturation: 1.12,
     splitS: [-0.018, -0.024], splitH: [0.012, 0.022], green: [-10, 0.7, 0.95], blue: [-12, 0.85, 1.0], warm: [-4, 1.15],
-    halation: 1.0, bloom: 0.45, grain: 0.75, grainSize: 1.4, softness: 0.5, vignette: 0.45, frame: 1 },
+    halation: 1.0, bloom: 0.45, grain: 0.75, grainSize: 1.4, softness: 0.5, vignette: 0.45 },
   { id: 'lantern', name: 'Lantern', temp: 0.12, tint: 0.0, contrast: 1.05, fade: 0.014, saturation: 1.06,
     splitS: [-0.014, -0.014], splitH: [0.008, 0.03], green: [-20, 0.8, 0.9], blue: [-6, 1.15, 0.95], warm: [4, 1.15],
-    halation: 0.55, bloom: 0.35, grain: 0.5, grainSize: 1.1, softness: 0.35, vignette: 0.35, frame: 1 },
+    halation: 0.55, bloom: 0.35, grain: 0.5, grainSize: 1.1, softness: 0.35, vignette: 0.35 },
   { id: 'golden', name: 'Golden', temp: 0.2, tint: 0.03, contrast: 1.15, fade: 0.01, saturation: 1.15,
     splitS: [-0.006, -0.014], splitH: [0.012, 0.035], green: [-24, 0.95, 0.85], blue: [-10, 0.9, 1.0], warm: [2, 1.2],
-    halation: 0.7, bloom: 0.3, grain: 0.42, grainSize: 1.1, softness: 0.3, vignette: 0.4, frame: 0 },
+    halation: 0.7, bloom: 0.3, grain: 0.42, grainSize: 1.1, softness: 0.3, vignette: 0.4 },
   { id: 'print', name: 'Print', temp: 0.0, tint: 0.0, contrast: 1.05, fade: 0.012, saturation: 1.05,
     splitS: [-0.008, -0.01], splitH: [0.006, 0.012], green: [-12, 0.85, 0.95], blue: [-6, 1.0, 1.0], warm: [0, 1.08],
-    halation: 0.35, bloom: 0.15, grain: 0.32, grainSize: 1.0, softness: 0.25, vignette: 0.25, frame: 0 },
+    halation: 0.35, bloom: 0.15, grain: 0.32, grainSize: 1.0, softness: 0.25, vignette: 0.25 },
   { id: 'overcast', name: 'Overcast', temp: -0.08, tint: 0.0, contrast: 0.92, fade: 0.04, saturation: 0.8,
     splitS: [-0.012, -0.016], splitH: [0.002, 0.006], green: [-14, 0.7, 0.95], blue: [-10, 0.8, 1.0], warm: [0, 1.05],
-    halation: 0.3, bloom: 0.2, grain: 0.5, grainSize: 1.2, softness: 0.4, vignette: 0.3, frame: 0 },
+    halation: 0.3, bloom: 0.2, grain: 0.5, grainSize: 1.2, softness: 0.4, vignette: 0.3 },
   { id: 'silver', name: 'Silver', mono: 1, temp: 0, tint: 0, contrast: 1.22, fade: 0.02, saturation: 1.0,
     splitS: [0, 0], splitH: [0.002, 0.006], green: [0, 1, 1], blue: [0, 1, 1], warm: [0, 1],
-    halation: 0.2, bloom: 0.25, grain: 0.85, grainSize: 1.4, softness: 0.3, vignette: 0.4, frame: 0 },
+    halation: 0.2, bloom: 0.25, grain: 0.85, grainSize: 1.4, softness: 0.3, vignette: 0.4 },
   { id: 'none', name: 'None', none: 1, temp: 0, tint: 0, contrast: 1, fade: 0, saturation: 1,
     splitS: [0, 0], splitH: [0, 0], green: [0, 1, 1], blue: [0, 1, 1], warm: [0, 1],
-    halation: 0, bloom: 0, grain: 0, grainSize: 1, softness: 0, vignette: 0, frame: 0 },
+    halation: 0, bloom: 0, grain: 0, grainSize: 1, softness: 0, vignette: 0 },
 ];
 
 // Sliders: [key, label, min, max, step, default, format]
@@ -204,7 +204,7 @@ const TEXTURE_SLIDERS = [
   ['softness', 'Softness', 0, 1, 0.01, null, v => Math.round(v * 100)],
   ['vignette', 'Vignette', 0, 1, 0.01, null, v => Math.round(v * 100)],
 ];
-const LOOK_KEYS = ['contrast', 'fade', 'saturation', 'halation', 'bloom', 'grain', 'grainSize', 'softness', 'vignette', 'frame'];
+const LOOK_KEYS = ['contrast', 'fade', 'saturation', 'halation', 'bloom', 'grain', 'grainSize', 'softness', 'vignette'];
 
 // ---------------------------------------------------------------------------
 // State
@@ -295,7 +295,7 @@ uniform vec3 u_wb; uniform float u_exposure;
 uniform float u_contrast; uniform float u_fade; uniform float u_sat;
 uniform vec4 u_split; uniform vec3 u_green; uniform vec3 u_blue; uniform vec2 u_warm;
 uniform float u_halation; uniform float u_bloomAmt; uniform float u_grain; uniform float u_grainSize;
-uniform float u_soft; uniform float u_vignette; uniform float u_frame; uniform float u_seed;
+uniform float u_soft; uniform float u_vignette; uniform float u_seed;
 uniform float u_mono; uniform float u_bypass; uniform float u_strength; uniform float u_linear;
 vec3 rd(vec2 uv){ vec3 s = texture(u_src, uv).rgb; return u_linear > 0.5 ? max(s, 0.0) : dec(s); }
 
@@ -409,21 +409,6 @@ void main(){
     col += u_grain*u_strength*0.2*ampS*resp*(vec3(n) + nc*0.4*(1.0 - u_mono));
   }
 
-  // Film gate: rounded frame edge with a slightly irregular border
-  if (u_frame > 0.0) {
-    vec2 c = (p - 0.5*u_full)/shortS;
-    vec2 offs = (vec2(hash(vec2(u_seed, 1.0)), hash(vec2(u_seed, 2.0))) - 0.5)*0.006;
-    vec2 he = 0.5*u_full/shortS - vec2(0.011);
-    float rad = 0.028;
-    vec2 d = abs(c - offs) - (he - rad);
-    float sd = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - rad;
-    float ang = atan(c.y, c.x);
-    sd += (vn(vec2(ang*90.0, u_seed*7.0)) - 0.5)*0.0018 + (vn(vec2(ang*12.0, u_seed*3.0)) - 0.5)*0.002;
-    float px = 1.2/shortS;
-    float inside = 1.0 - smoothstep(-px, px, sd);
-    col *= 1.0 - 0.35*smoothstep(-0.03, 0.0, sd);
-    col = mix(vec3(0.012, 0.011, 0.012), col, inside);
-  }
   o = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
 
@@ -641,7 +626,6 @@ function renderFinal(s, o) {
   gl.uniform1f(u.u_grainSize, s.grainSize);
   gl.uniform1f(u.u_soft, s.softness * st);
   gl.uniform1f(u.u_vignette, s.vignette * st);
-  gl.uniform1f(u.u_frame, s.frame ? 1 : 0);
   gl.uniform1f(u.u_seed, o.seed || 1);
   gl.uniform1f(u.u_mono, look.mono ? 1 : 0);
   gl.uniform1f(u.u_bypass, o.bypass ? 1 : 0);
@@ -742,7 +726,7 @@ function resampleLinear(srcTex, sw, sh, w, h) {
 // Small neutral rendering of a source (for the photo strip)
 function snapshot(tex, w, h, linear, maxSide) {
   const [tw, th] = fitSize(w, h, maxSide);
-  const s = Object.assign({}, state, { look: 'none', strength: 0, frame: 0 });
+  const s = Object.assign({}, state, { look: 'none', strength: 0 });
   const t = makeTarget(tw, th, false);
   renderGlow(tex, w, h, s, linear);
   renderFinal(s, { srcTex: tex, fullW: tw, fullH: th, originX: 0, originY: 0, vpW: tw, vpH: th, flip: false, target: t, linear });
@@ -855,7 +839,6 @@ function renderThumbs() {
   for (const look of LOOKS) {
     const s = Object.assign({}, state, { look: look.id, strength: 1, split: 1 });
     for (const k of LOOK_KEYS) s[k] = look[k];
-    s.frame = 0;
     renderGlow(preview.tex, preview.w, preview.h, s, preview.linear);
     renderFinal(s, { srcTex: preview.tex, fullW: fw, fullH: fh, originX: (fw - TH) / 2, originY: (fh - TH) / 2,
       vpW: TH, vpH: TH, flip: false, target: thumbTarget, seed: 1, linear: preview.linear });
@@ -961,17 +944,13 @@ const paneColor = document.getElementById('pane-color'), paneTex = document.getE
 buildSliders(paneColor, COLOR_SLIDERS);
 buildSliders(paneTex, TEXTURE_SLIDERS);
 {
-  const t = document.createElement('div'); t.className = 'toggle';
-  t.innerHTML = '<label>Film gate frame</label><button class="switch" id="frameSw" aria-label="Film gate frame"></button>';
-  paneTex.appendChild(t);
-  t.querySelector('button').onclick = () => { state.frame = state.frame ? 0 : 1; syncUI(); changed(); };
   for (const pane of [paneColor, paneTex]) {
     const r = document.createElement('div'); r.className = 'resetrow';
     r.innerHTML = '<button>Reset to look</button>';
     r.querySelector('button').onclick = () => {
       if (pane === paneColor) { state.exposure = 0; state.temp = 0; state.tint = 0; state.split = 1;
         for (const k of ['contrast', 'fade', 'saturation']) state[k] = lookById(state.look)[k]; }
-      else for (const k of ['halation', 'bloom', 'grain', 'grainSize', 'softness', 'vignette', 'frame']) state[k] = lookById(state.look)[k];
+      else for (const k of ['halation', 'bloom', 'grain', 'grainSize', 'softness', 'vignette']) state[k] = lookById(state.look)[k];
       syncUI(); changed();
     };
     pane.appendChild(r);
@@ -985,7 +964,6 @@ function syncUI() {
   for (const c of chips.children) c.classList.toggle('on', c.dataset.id === state.look);
   for (const k in sliderEls) { const e = sliderEls[k]; e.input.value = state[k]; e.out.textContent = e.fmt(state[k]); }
   strength.value = state.strength; strengthOut.textContent = Math.round(state.strength * 100);
-  document.getElementById('frameSw').classList.toggle('on', !!state.frame);
 }
 let thumbTimer = null;
 function changed(save = true) {
