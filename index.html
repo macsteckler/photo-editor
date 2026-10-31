@@ -45,6 +45,9 @@
   #badge { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: #000b;
     padding: 4px 10px; border-radius: 999px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
     display: none; pointer-events: none; }
+  #srcBadge { position: absolute; top: 14px; right: 24px; background: #000b; padding: 3px 8px; border-radius: 6px;
+    font-size: 10px; letter-spacing: .12em; display: none; pointer-events: none; }
+  #srcBadge.raw { color: var(--accent); }
   #hint { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; color: var(--muted);
     font-size: 11px; pointer-events: none; transition: opacity .6s; }
   #strip { display: none; gap: 6px; padding: 4px 16px 6px; overflow-x: auto; scrollbar-width: none; }
@@ -118,6 +121,7 @@
     </div>
     <canvas id="view"></canvas>
     <div id="badge">Original</div>
+    <div id="srcBadge"></div>
     <div id="hint">Press and hold the photo to compare</div>
   </div>
   <div id="strip"></div>
@@ -135,7 +139,8 @@
   <div class="pane" id="pane-color"></div>
   <div class="pane" id="pane-texture"></div>
 </div>
-<input type="file" id="file" accept="image/*" multiple hidden>
+<input type="file" id="file" accept="image/*,.dng,image/x-adobe-dng" multiple hidden>
+<script src="dng.js"></script>
 
 <div id="sheet">
   <div class="card">
@@ -240,9 +245,10 @@ vec3 enc(vec3 c){ c = max(c,0.0); return mix(c*12.92, 1.055*pow(c, vec3(1.0/2.4)
 // Bright-pass from the (sRGB) preview image into scene-linear half-res.
 const FS_PREFILTER = COMMON + `
 uniform sampler2D u_src; uniform vec2 u_texel; uniform vec2 u_size;
-uniform vec3 u_wb; uniform float u_exposure; uniform float u_enc;
+uniform vec3 u_wb; uniform float u_exposure; uniform float u_enc; uniform float u_linear;
 vec3 tap(vec2 uv){
   vec3 s = texture(u_src, uv).rgb;
+  if (u_linear > 0.5) return min(max(s, 0.0), vec3(32.0));
   float m = max(s.r, max(s.g, s.b));
   vec3 l = dec(s);
   // Clipped highlights in an 8-bit photo are brighter than 1.0: re-inflate them.
@@ -290,7 +296,8 @@ uniform float u_contrast; uniform float u_fade; uniform float u_sat;
 uniform vec4 u_split; uniform vec3 u_green; uniform vec3 u_blue; uniform vec2 u_warm;
 uniform float u_halation; uniform float u_bloomAmt; uniform float u_grain; uniform float u_grainSize;
 uniform float u_soft; uniform float u_vignette; uniform float u_frame; uniform float u_seed;
-uniform float u_mono; uniform float u_bypass; uniform float u_strength;
+uniform float u_mono; uniform float u_bypass; uniform float u_strength; uniform float u_linear;
+vec3 rd(vec2 uv){ vec3 s = texture(u_src, uv).rgb; return u_linear > 0.5 ? max(s, 0.0) : dec(s); }
 
 float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3, p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
 float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
@@ -329,11 +336,10 @@ vec3 curve(vec3 x){
 void main(){
   vec2 p = u_origin + vec2(gl_FragCoord.x, u_flip > 0.5 ? u_vpH - gl_FragCoord.y : gl_FragCoord.y);
   vec2 uv = p / u_full;
-  vec3 src = texture(u_src, uv).rgb;
-  if (u_bypass > 0.5) { o = vec4(src, 1.0); return; }
+  vec3 lin = rd(uv);
+  if (u_bypass > 0.5) { o = vec4(enc(lin*exp2(u_exposure)), 1.0); return; }
   float shortS = min(u_full.x, u_full.y);
 
-  vec3 lin = dec(src);
   // Softness: undo phone over-sharpening with a small, resolution-relative blur.
   if (u_soft > 0.0) {
     vec2 r = vec2(shortS/1400.0) / u_full;
@@ -341,7 +347,7 @@ void main(){
     for (int i = 0; i < 8; i++) {
       float a = float(i)*0.7853982 + 0.3;
       vec2 off = vec2(cos(a), sin(a)) * r * (i % 2 == 0 ? 1.0 : 0.55);
-      b += dec(texture(u_src, uv + off).rgb) * 0.1;
+      b += rd(uv + off) * 0.1;
     }
     lin = mix(lin, b, clamp(u_soft, 0.0, 1.0)*0.85);
   }
@@ -421,6 +427,77 @@ void main(){
   o = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
 
+// RAW develop: black/white levels, white balance, highlight clip, demosaic (Malvar-He-Cutler),
+// camera -> linear sRGB matrix, crop and orientation. Output is scene-linear.
+const FS_RAW = COMMON + `
+uniform highp usampler2D u_raw;
+uniform int u_mode; uniform ivec2 u_rawSize; uniform ivec2 u_activeOrigin;
+uniform ivec2 u_cropOrigin; uniform ivec2 u_cropSize; uniform int u_orient;
+uniform vec4 u_black; uniform float u_white; uniform ivec4 u_cfa;
+uniform vec3 u_wb; uniform mat3 u_m; uniform float u_gain; uniform int u_y0;
+int pm(int v){ return ((v % 2) + 2) % 2; }
+int mir(int v, int n){ if (v < 0) v = -v; if (v >= n) v = 2*n - 2 - v; return clamp(v, 0, n-1); }
+float rawAt(ivec2 c){
+  c = ivec2(mir(c.x, u_rawSize.x), mir(c.y, u_rawSize.y));
+  ivec2 r = c - u_activeOrigin; int i = pm(r.x) + 2*pm(r.y);
+  float v = float(texelFetch(u_raw, c, 0).r);
+  return min(max(v - u_black[i], 0.0)/(u_white - u_black[i]) * u_wb[u_cfa[i]], 1.0);
+}
+vec3 demosaic(ivec2 c){
+  ivec2 r = c - u_activeOrigin; int ch = u_cfa[pm(r.x) + 2*pm(r.y)];
+  float A = rawAt(c);
+  float h1 = rawAt(c+ivec2(1,0)) + rawAt(c-ivec2(1,0)), v1 = rawAt(c+ivec2(0,1)) + rawAt(c-ivec2(0,1));
+  float h2 = rawAt(c+ivec2(2,0)) + rawAt(c-ivec2(2,0)), v2 = rawAt(c+ivec2(0,2)) + rawAt(c-ivec2(0,2));
+  float D = rawAt(c+ivec2(1,1)) + rawAt(c+ivec2(-1,1)) + rawAt(c+ivec2(1,-1)) + rawAt(c+ivec2(-1,-1));
+  vec3 rgb;
+  if (ch == 1) {
+    float hc = (5.0*A + 4.0*h1 - D - h2 + 0.5*v2)/8.0;
+    float vc = (5.0*A + 4.0*v1 - D - v2 + 0.5*h2)/8.0;
+    int hch = u_cfa[(1 - pm(r.x)) + 2*pm(r.y)];
+    rgb = hch == 0 ? vec3(hc, A, vc) : vec3(vc, A, hc);
+  } else {
+    float gg = (4.0*A + 2.0*(h1 + v1) - (h2 + v2))/8.0;
+    float dd = (6.0*A + 2.0*D - 1.5*(h2 + v2))/8.0;
+    rgb = ch == 0 ? vec3(A, gg, dd) : vec3(dd, gg, A);
+  }
+  return max(rgb, 0.0);
+}
+vec3 linearAt(ivec2 c){
+  vec3 v = vec3(texelFetch(u_raw, c, 0).rgb);
+  return min(max(v - u_black.rgb, 0.0)/(u_white - u_black.rgb) * u_wb, vec3(1.0));
+}
+void main(){
+  ivec2 o2 = ivec2(gl_FragCoord.xy) + ivec2(0, u_y0);
+  int W = u_cropSize.x, H = u_cropSize.y, x = o2.x, y = o2.y;
+  ivec2 c;
+  if (u_orient == 2) c = ivec2(W-1-x, y);
+  else if (u_orient == 3) c = ivec2(W-1-x, H-1-y);
+  else if (u_orient == 4) c = ivec2(x, H-1-y);
+  else if (u_orient == 5) c = ivec2(y, x);
+  else if (u_orient == 6) c = ivec2(y, H-1-x);
+  else if (u_orient == 7) c = ivec2(W-1-y, H-1-x);
+  else if (u_orient == 8) c = ivec2(W-1-y, x);
+  else c = ivec2(x, y);
+  c += u_cropOrigin;
+  vec3 cam = u_mode == 0 ? demosaic(c) : linearAt(c);
+  o = vec4(max(u_m * cam, 0.0) * u_gain, 1.0);
+}`;
+
+// Area-average resample of a linear texture (for the preview copy of a RAW image).
+const FS_RESAMPLE = COMMON + `
+uniform sampler2D u_src; uniform vec2 u_size; uniform vec2 u_srcSize;
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_size;
+  float fp = u_srcSize.x / u_size.x;
+  int n = clamp(int(round(fp*0.5)), 1, 8);
+  vec3 acc = vec3(0);
+  for (int j = 0; j < 8; j++) { if (j >= n) break;
+    for (int i = 0; i < 8; i++) { if (i >= n) break;
+      vec2 off = (vec2(i, j) + 0.5)/float(n) - 0.5;
+      acc += texture(u_src, uv + off/u_size).rgb; } }
+  o = vec4(acc/float(n*n), 1.0);
+}`;
+
 function compile(fs) {
   const p = gl.createProgram();
   for (const [type, s] of [[gl.VERTEX_SHADER, VS], [gl.FRAGMENT_SHADER, fs]]) {
@@ -435,7 +512,8 @@ function compile(fs) {
   return { p, u };
 }
 let P = null;
-if (gl) P = { pre: compile(FS_PREFILTER), down: compile(FS_DOWN), up: compile(FS_UP), fin: compile(FS_FINAL) };
+if (gl) P = { pre: compile(FS_PREFILTER), down: compile(FS_DOWN), up: compile(FS_UP), fin: compile(FS_FINAL),
+  raw: compile(FS_RAW), resample: compile(FS_RESAMPLE) };
 const vao = gl && gl.createVertexArray();
 
 function makeTex(w, h, float, data) {
@@ -491,7 +569,7 @@ function params(s) {
   };
 }
 
-function renderGlow(preTex, pw, ph, s) {
+function renderGlow(preTex, pw, ph, s, linear) {
   const { wb, exposure } = params(s);
   gl.bindVertexArray(vao);
   // prefilter
@@ -504,6 +582,7 @@ function renderGlow(preTex, pw, ph, s) {
   gl.uniform3fv(P.pre.u.u_wb, wb);
   gl.uniform1f(P.pre.u.u_exposure, exposure);
   gl.uniform1f(P.pre.u.u_enc, ENC);
+  gl.uniform1f(P.pre.u.u_linear, linear ? 1 : 0);
   drawTo(L);
   gl.useProgram(P.down.p);
   for (let i = 1; i < LEVELS; i++) {
@@ -567,6 +646,7 @@ function renderFinal(s, o) {
   gl.uniform1f(u.u_mono, look.mono ? 1 : 0);
   gl.uniform1f(u.u_bypass, o.bypass ? 1 : 0);
   gl.uniform1f(u.u_strength, look.none ? 0 : s.strength);
+  gl.uniform1f(u.u_linear, o.linear ? 1 : 0);
   drawTo(o.target || null);
 }
 
@@ -575,9 +655,9 @@ function renderFinal(s, o) {
 // ---------------------------------------------------------------------------
 const PREVIEW_MAX = 2048;
 const EXPORT_MAX_PIXELS = 25e6;
-let photos = [];   // { file, name, seed, thumbURL }
+let photos = [];   // { file, name, seed, thumbURL, raw }
 let current = -1;
-let preview = null; // { tex, w, h }
+let preview = null; // { tex, fb, w, h, linear, full }
 
 async function decode(file) {
   try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); }
@@ -601,30 +681,134 @@ function rasterize(img, w, h) {
 }
 function seedFor(file) { let h = 7; for (const ch of file.name + file.size) h = (h * 31 + ch.charCodeAt(0)) % 9973; return 1 + h / 997; }
 
+// ---------------- RAW ----------------
+function looksRaw(f) { return /\.dng$/i.test(f.name) || /dng/i.test(f.type); }
+async function sniffRaw(f) {
+  if (looksRaw(f)) return true;
+  if (/\.(jpe?g|png|heic|heif|webp|gif)$/i.test(f.name)) return false;
+  return DNG.isDNG(new Uint8Array(await f.slice(0, 8).arrayBuffer()));
+}
+// Decode a DNG and develop it on the GPU into a scene-linear RGBA16F texture.
+async function developRaw(file, onProgress) {
+  if (!floatOK) throw new Error('This browser cannot render the float textures RAW needs.');
+  const d = await DNG.decode(await file.arrayBuffer(), { onProgress });
+  const rawTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, rawTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+  if (d.spp === 1) gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, d.width, d.height, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, d.data);
+  else if (d.spp === 3) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB16UI, d.width, d.height, 0, gl.RGB_INTEGER, gl.UNSIGNED_SHORT, d.data);
+  else throw new Error('Unsupported RAW layout (' + d.spp + ' samples)');
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  d.data = null;
+  const rot = d.orientation >= 5;
+  const W = rot ? d.cropSize[1] : d.cropSize[0], H = rot ? d.cropSize[0] : d.cropSize[1];
+  if (W > MAX_TEX || H > MAX_TEX) throw new Error('RAW is larger than this GPU supports');
+  const target = makeTarget(W, H, true);
+  // White balance gains, normalised so the weakest channel is 1 (clip point = white)
+  const nInv = d.neutral.map(v => 1 / v), mn = Math.min(...nInv), wb = nInv.map(v => v / mn);
+  const m = d.matrix.map((v, i) => v / wb[i % 3]);
+  const u = P.raw.u;
+  gl.useProgram(P.raw.p); gl.bindVertexArray(vao);
+  gl.viewport(0, 0, W, H);
+  bindTex(0, rawTex); gl.uniform1i(u.u_raw, 0);
+  gl.uniform1i(u.u_mode, d.spp === 1 ? 0 : 1);
+  gl.uniform2i(u.u_rawSize, d.width, d.height);
+  gl.uniform2i(u.u_activeOrigin, d.activeOrigin[0], d.activeOrigin[1]);
+  gl.uniform2i(u.u_cropOrigin, d.cropOrigin[0], d.cropOrigin[1]);
+  gl.uniform2i(u.u_cropSize, d.cropSize[0], d.cropSize[1]);
+  gl.uniform1i(u.u_orient, d.orientation);
+  gl.uniform4f(u.u_black, d.black[0], d.black[1], d.black[2], d.black[3]);
+  gl.uniform1f(u.u_white, d.white);
+  gl.uniform4i(u.u_cfa, d.cfa[0], d.cfa[1], d.cfa[2], d.cfa[3]);
+  gl.uniform3f(u.u_wb, wb[0], wb[1], wb[2]);
+  gl.uniformMatrix3fv(u.u_m, true, new Float32Array(m));
+  gl.uniform1f(u.u_gain, Math.pow(2, d.baselineExposure));
+  gl.uniform1i(u.u_y0, 0);
+  drawTo(target);
+  gl.deleteTexture(rawTex);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return Object.assign(target, { w: W, h: H, meta: d });
+}
+function resampleLinear(srcTex, sw, sh, w, h) {
+  const t = makeTarget(w, h, true);
+  gl.useProgram(P.resample.p); gl.bindVertexArray(vao); gl.viewport(0, 0, w, h);
+  bindTex(0, srcTex); gl.uniform1i(P.resample.u.u_src, 0);
+  gl.uniform2f(P.resample.u.u_size, w, h); gl.uniform2f(P.resample.u.u_srcSize, sw, sh);
+  drawTo(t);
+  return Object.assign(t, { w, h });
+}
+// Small neutral rendering of a source (for the photo strip)
+function snapshot(tex, w, h, linear, maxSide) {
+  const [tw, th] = fitSize(w, h, maxSide);
+  const s = Object.assign({}, state, { look: 'none', strength: 0, frame: 0 });
+  const t = makeTarget(tw, th, false);
+  renderGlow(tex, w, h, s, linear);
+  renderFinal(s, { srcTex: tex, fullW: tw, fullH: th, originX: 0, originY: 0, vpW: tw, vpH: th, flip: false, target: t, linear });
+  const buf = new Uint8ClampedArray(tw * th * 4);
+  gl.readPixels(0, 0, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+  freeTarget(t); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const c = document.createElement('canvas'); c.width = tw; c.height = th;
+  c.getContext('2d').putImageData(new ImageData(buf, tw, th), 0, 0);
+  return c;
+}
+
+const hint = document.getElementById('hint');
+function setStatus(text) { hint.textContent = text; hint.style.opacity = 1; }
+
 async function addFiles(files) {
   const start = photos.length;
   for (const f of files) {
-    if (!f.type.startsWith('image/') && !/\.(heic|heif|jpe?g|png|webp)$/i.test(f.name)) continue;
+    if (!f.type.startsWith('image/') && !/\.(heic|heif|jpe?g|png|webp|dng)$/i.test(f.name)) continue;
     photos.push({ file: f, name: f.name.replace(/\.[^.]+$/, ''), seed: seedFor(f) });
   }
   if (photos.length > start) { await select(start); renderStrip(); }
 }
 
+function freePreview() {
+  if (!preview) return;
+  if (preview.full) freeTarget(preview.full);
+  if (preview.fb) freeTarget(preview);
+  else if (!preview.full) gl.deleteTexture(preview.tex);
+  preview = null;
+}
+
 async function select(i) {
   current = i;
   const ph = photos[i];
-  const img = await decode(ph.file);
-  const [w0, h0] = dims(img);
-  const [w, h] = fitSize(w0, h0, Math.min(PREVIEW_MAX, MAX_TEX));
-  const c = rasterize(img, w, h);
-  if (!ph.thumbURL) {
-    const [tw, th] = fitSize(w0, h0, 120);
-    ph.thumbURL = rasterize(c, tw, th).toDataURL('image/jpeg', 0.7);
+  freePreview();
+  if (ph.raw === undefined) ph.raw = await sniffRaw(ph.file);
+  if (ph.raw) {
+    try {
+      setStatus('Developing RAW…');
+      const full = await developRaw(ph.file, f => setStatus('Developing RAW… ' + Math.round(f * 100) + '%'));
+      const [w, h] = fitSize(full.w, full.h, Math.min(PREVIEW_MAX, MAX_TEX));
+      if (w === full.w && h === full.h) preview = { tex: full.tex, fb: null, w, h, linear: true, full };
+      else { const pre = resampleLinear(full.tex, full.w, full.h, w, h); preview = { tex: pre.tex, fb: pre.fb, w, h, linear: true, full }; }
+      const m = full.meta;
+      ph.info = 'RAW · ' + (m.kind === 'cfa' ? 'Bayer' : 'ProRAW') + ' · ' + full.w + '×' + full.h + (m.binned ? ' (binned)' : '');
+      setStatus('Press and hold the photo to compare');
+    } catch (err) {
+      console.warn(err);
+      ph.raw = false; ph.rawError = String(err.message || err);
+      setStatus('RAW failed: ' + ph.rawError);
+    }
   }
-  if (img.close) img.close();
-  if (preview) gl.deleteTexture(preview.tex);
-  preview = { tex: makeTex(0, 0, false, c), w, h };
-  buildPyramid(w, h);
+  if (!preview) {
+    const img = await decode(ph.file);
+    const [w0, h0] = dims(img);
+    const [w, h] = fitSize(w0, h0, Math.min(PREVIEW_MAX, MAX_TEX));
+    const c = rasterize(img, w, h);
+    if (img.close) img.close();
+    preview = { tex: makeTex(0, 0, false, c), fb: null, w, h, linear: false, full: null };
+    ph.info = 'JPEG/HEIC · processed by iPhone';
+  }
+  buildPyramid(preview.w, preview.h);
+  if (!ph.thumbURL) ph.thumbURL = snapshot(preview.tex, preview.w, preview.h, preview.linear, 120).toDataURL('image/jpeg', 0.7);
+  const sb = document.getElementById('srcBadge');
+  sb.textContent = ph.raw ? 'RAW' : 'JPEG'; sb.className = ph.raw ? 'raw' : ''; sb.style.display = 'block';
+  sb.title = ph.info;
   document.getElementById('empty').style.display = 'none';
   view.style.display = 'block';
   document.getElementById('exportBtn').disabled = false;
@@ -652,9 +836,9 @@ function requestRender() {
   if (pending || !preview) return; pending = true;
   requestAnimationFrame(() => {
     pending = false;
-    renderGlow(preview.tex, preview.w, preview.h, state);
+    renderGlow(preview.tex, preview.w, preview.h, state, preview.linear);
     renderFinal(state, { srcTex: preview.tex, fullW: view.width, fullH: view.height, originX: 0, originY: 0,
-      vpW: view.width, vpH: view.height, flip: true, bypass, seed: photos[current].seed });
+      vpW: view.width, vpH: view.height, flip: true, bypass, seed: photos[current].seed, linear: preview.linear });
   });
 }
 
@@ -672,9 +856,9 @@ function renderThumbs() {
     const s = Object.assign({}, state, { look: look.id, strength: 1, split: 1 });
     for (const k of LOOK_KEYS) s[k] = look[k];
     s.frame = 0;
-    renderGlow(preview.tex, preview.w, preview.h, s);
+    renderGlow(preview.tex, preview.w, preview.h, s, preview.linear);
     renderFinal(s, { srcTex: preview.tex, fullW: fw, fullH: fh, originX: (fw - TH) / 2, originY: (fh - TH) / 2,
-      vpW: TH, vpH: TH, flip: false, target: thumbTarget, seed: 1 });
+      vpW: TH, vpH: TH, flip: false, target: thumbTarget, seed: 1, linear: preview.linear });
     gl.readPixels(0, 0, TH, TH, gl.RGBA, gl.UNSIGNED_BYTE, buf);
     const cv = document.querySelector(`.chip[data-id="${look.id}"] canvas`);
     cv.width = TH; cv.height = TH;
@@ -685,25 +869,44 @@ function renderThumbs() {
 
 // Full resolution render, in horizontal strips to keep memory low.
 async function developFull(ph, s, onProgress) {
-  const img = await decode(ph.file);
-  const [w0, h0] = dims(img);
-  const [W, H] = fitSize(w0, h0, Math.min(MAX_TEX, 16384), EXPORT_MAX_PIXELS);
-  const srcCanvas = (W === w0 && H === h0 && img instanceof ImageBitmap) ? img : rasterize(img, W, H);
-  const tex = makeTex(0, 0, false, srcCanvas);
-  if (img.close && srcCanvas !== img) img.close();
-  if (srcCanvas.close) srcCanvas.close();
-
-  // Glow comes from the preview-size image of *this* photo.
-  const [pw, ph2] = fitSize(W, H, Math.min(PREVIEW_MAX, MAX_TEX));
-  let preTex = preview.tex, preW = preview.w, preH = preview.h, ownPre = false;
-  if (photos[current] !== ph) {
-    const pc = document.createElement('canvas'); pc.width = pw; pc.height = ph2;
-    const tmp = await decode(ph.file);
-    pc.getContext('2d').drawImage(tmp, 0, 0, pw, ph2); if (tmp.close) tmp.close();
-    preTex = makeTex(0, 0, false, pc); preW = pw; preH = ph2; ownPre = true;
-    buildPyramid(pw, ph2);
+  const cleanup = [];
+  const isCur = ph === photos[current] && preview;
+  let src, W, H, linear = false, preTex, preW, preH;
+  if (ph.raw === undefined) ph.raw = await sniffRaw(ph.file);
+  if (ph.raw) {
+    try {
+      let full;
+      if (isCur && preview.full) full = preview.full;
+      else { full = await developRaw(ph.file); cleanup.push(() => freeTarget(full)); }
+      src = full.tex; W = full.w; H = full.h; linear = true;
+      if (isCur && preview.linear) { preTex = preview.tex; preW = preview.w; preH = preview.h; }
+      else {
+        [preW, preH] = fitSize(W, H, Math.min(PREVIEW_MAX, MAX_TEX));
+        const pre = resampleLinear(src, W, H, preW, preH); preTex = pre.tex; cleanup.push(() => freeTarget(pre));
+      }
+    } catch (err) { console.warn(err); ph.raw = false; cleanup.forEach(f => f()); cleanup.length = 0; }
   }
-  renderGlow(preTex, preW, preH, s);
+  if (!ph.raw) {
+    const img = await decode(ph.file);
+    const [w0, h0] = dims(img);
+    [W, H] = fitSize(w0, h0, Math.min(MAX_TEX, 16384), EXPORT_MAX_PIXELS);
+    const srcCanvas = (W === w0 && H === h0 && img instanceof ImageBitmap) ? img : rasterize(img, W, H);
+    src = makeTex(0, 0, false, srcCanvas);
+    if (img.close && srcCanvas !== img) img.close();
+    if (srcCanvas.close) srcCanvas.close();
+    cleanup.push(() => gl.deleteTexture(src));
+    if (isCur && !preview.linear) { preTex = preview.tex; preW = preview.w; preH = preview.h; }
+    else {
+      [preW, preH] = fitSize(W, H, Math.min(PREVIEW_MAX, MAX_TEX));
+      const tmp = await decode(ph.file);
+      const pc = rasterize(tmp, preW, preH); if (tmp.close) tmp.close();
+      preTex = makeTex(0, 0, false, pc); cleanup.push(() => gl.deleteTexture(preTex));
+    }
+  }
+  // Glow comes from the preview-size image so it matches what you saw.
+  const ownPyr = !(isCur && preTex === preview.tex);
+  if (ownPyr) buildPyramid(preW, preH);
+  renderGlow(preTex, preW, preH, s, linear);
 
   const out = document.createElement('canvas'); out.width = W; out.height = H;
   const octx = out.getContext('2d');
@@ -712,15 +915,16 @@ async function developFull(ph, s, onProgress) {
   const buf = new Uint8Array(W * STRIP * 4);
   for (let y = 0; y < H; y += STRIP) {
     const sh = Math.min(STRIP, H - y);
-    renderFinal(s, { srcTex: tex, fullW: W, fullH: H, originX: 0, originY: y, vpW: W, vpH: sh,
-      flip: false, target, seed: ph.seed });
+    renderFinal(s, { srcTex: src, fullW: W, fullH: H, originX: 0, originY: y, vpW: W, vpH: sh,
+      flip: false, target, seed: ph.seed, linear });
     gl.readPixels(0, 0, W, sh, gl.RGBA, gl.UNSIGNED_BYTE, buf);
     octx.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer, 0, W * sh * 4), W, sh), 0, y);
     onProgress && onProgress((y + sh) / H);
     await new Promise(r => setTimeout(r, 0));
   }
-  freeTarget(target); gl.deleteTexture(tex);
-  if (ownPre) { gl.deleteTexture(preTex); buildPyramid(preview.w, preview.h); }
+  freeTarget(target);
+  cleanup.forEach(f => f());
+  if (ownPyr && preview) buildPyramid(preview.w, preview.h);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   const blob = await new Promise(r => out.toBlob(r, 'image/jpeg', 0.93));
   out.width = out.height = 0;
