@@ -1,6 +1,24 @@
 # Nitrate
 
-A film-look processor for iPhone photos that runs in the browser. Everything happens on the phone in WebGL; no photos are uploaded.
+A film-look processor for iPhone photos. It develops from **RAW sensor data** rather than filtering the iPhone's processed photo.
+
+- **Web app** (`index.html`): open DNG files (ProRAW or Bayer RAW) or ordinary photos. Everything runs on the phone in WebGL; no photos are uploaded.
+- **Native camera app** (`ios/Nitrate.swiftpm`): shoots RAW directly from the sensor and develops it with the same film pipeline. See [ios/README.md](ios/README.md).
+
+## RAW development (web)
+
+`dng.js` reads DNGs compressed with lossless JPEG, Deflate, or no compression. 48 MP ProRAW is 2×2-binned to 12 MP while decoding. A GPU pass then:
+
+- applies black and white levels and the as-shot white balance, and clips highlights to neutral
+- demosaics Bayer data (Malvar–He–Cutler)
+- converts camera color to linear sRGB with the DNG's forward or color matrix and baseline exposure
+- applies the DNG's crop and orientation
+
+Apple's local tone map and sharpening are never applied. The film pipeline below receives scene-linear light with real highlight headroom, which also drives the halation.
+
+ProRAW saved with **JPEG XL** compression (an option on iPhone 16 Pro and later) isn't supported in the web app. Set Settings → Camera → Formats → ProRAW to "JPEG Lossless (Most Compatible)", or use the native app.
+
+The web app shows a **RAW** or **JPEG** badge on each photo. iOS sometimes hands Safari a converted JPEG when you pick from the photo library. If you see **JPEG** for a ProRAW photo, save it to Files first (Photos → Share → Save to Files) and open it from there.
 
 ## Pipeline
 
